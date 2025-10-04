@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="ar">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pollution Runner — لعبة عن التلوث</title>
+<style>
+  :root{
+    --bg:#8fd3ff;
+    --ground:#4d3b2b;
+    --platform:#765f4a;
+    --hud:#ffffffcc;
+    --accent:#2e8b57;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  }
+  html,body{height:100%; margin:0; background:linear-gradient(#aee6ff, #bfe9ff); display:flex; align-items:center; justify-content:center;}
+  #game-wrap{ width:880px; background:transparent; box-shadow:0 10px 30px rgba(0,0,0,0.2); border-radius:10px; overflow:hidden; }
+  header{display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:rgba(255,255,255,0.6);}
+  header h1{margin:0; font-size:18px;}
+  #hud{display:flex; gap:12px; align-items:center;}
+  .hud-box{background:var(--hud); padding:6px 10px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.08); font-size:14px;}
+  #canvas{ display:block; background: linear-gradient(#c7f0ff, #7ec0ff); width:100%; height:480px; }
+  footer{padding:8px 12px; background:rgba(255,255,255,0.6); display:flex; justify-content:space-between; align-items:center;}
+  button { background:var(--accent); color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+  button:active{ transform:translateY(1px); }
+  .small{font-size:13px; color:#333;}
+  @media (max-width:920px){
+    html,body{padding:10px}
+    #game-wrap{width:100%;}
+  }
+</style>
+</head>
+<body>
+  <div id="game-wrap" role="application" aria-label="لعبة التلوث">
+    <header>
+      <h1>Pollution Runner — لعبة عن التلوث 🌳💨🔥</h1>
+      <div id="hud">
+        <div class="hud-box">درجة الهواء (AQI): <span id="aqi">N/A</span></div>
+        <div class="hud-box">أشجار مزروعة: <span id="trees">0</span></div>
+        <div class="hud-box">صحة: <span id="health">100</span>%</div>
+      </div>
+    </header>
+
+    <canvas id="canvas" width="880" height="480"></canvas>
+
+    <footer>
+      <div class="small">تحكم: ← → للحركة، مسافة/سهم للأعلى للقفز. اجمع الأشجار 🌲 وتجنّب السحب 💨 والمصانع 🔥</div>
+      <div>
+        <button id="restart">إعادة التشغيل</button>
+      </div>
+    </footer>
+  </div>
+
+<script>
+// ---- init canvas ----
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const W = canvas.width;
+const H = canvas.height;
+
+// HUD
+const elAQI = document.getElementById('aqi');
+const elTrees = document.getElementById('trees');
+const elHealth = document.getElementById('health');
+const restartBtn = document.getElementById('restart');
+
+// game state
+let keys = {};
+let gravity = 0.8;
+let frame = 0;
+let gameOver = false;
+
+// player
+const player = {
+  x: 60, y: H - 140, w: 36, h: 48,
+  vx: 0, vy: 0, speed: 3.2, jumping: false, color: '#ffb84d',
+  health: 100,
+  trees: 0
+};
+
+// platforms
+let platforms = [
+  {x:0, y:H-40, w: W, h:40},
+  {x:200, y:360, w:120, h:12},
+  {x:420, y:300, w:140, h:12},
+  {x:620, y:240, w:120, h:12}
+];
+
+// trees
+let trees = [];
+
+// clouds
+let clouds = [];
+
+// factories
+let factories = [
+  {x:300, y:H-40-60, w:60, h:60}
+];
+
+// 🔥 النار (واحدة فقط)
+let fire = {x:500, y:H-40-30, w:30, h:30};
+
+// ---- helpers ----
+function rectsOverlap(a,b){
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// spawn initial trees
+function initTrees(){
+  trees = [
+    {x:240, y:340, r:10, collected:false},
+    {x:460, y:280, r:10, collected:false},
+    {x:660, y:220, r:10, collected:false}
+  ];
+}
+
+// reset
+function resetGame(){
+  player.x = 60; player.y = H - 140; player.vx = 0; player.vy = 0;
+  player.health = 100; player.trees = 0;
+  trees = []; clouds = [];
+  initTrees();
+  frame = 0;
+  gameOver = false;
+  // restart loop if was stopped
+  requestAnimationFrame(loop);
+}
+
+// set up
+initTrees();
+
+// input
+window.addEventListener('keydown', e=>{
+  keys[e.code] = true;
+  if(['ArrowUp','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+});
+window.addEventListener('keyup', e=>{ keys[e.code] = false; });
+
+restartBtn.onclick = ()=>{ resetGame(); };
+
+// ---- drawPlayer (حسّن الشكل) ----
+function drawPlayer(x,y,w,h){
+  ctx.save();
+
+  // shadow
+  ctx.fillStyle = "rgba(0,0,0,0.22)";
+  ctx.beginPath();
+  ctx.ellipse(x + w/2, y + h + 6, w*0.6, 6, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // body (blue overalls)
+  ctx.fillStyle = "#2d5be3";
+  ctx.fillRect(x, y + h*0.28, w, h*0.72);
+
+  // face
+  ctx.fillStyle = "#f1c27d";
+  ctx.beginPath();
+  ctx.arc(x + w/2, y + h*0.18, w*0.34, 0, Math.PI*2);
+  ctx.fill();
+
+  // red cap brim
+  ctx.fillStyle = "#b80b0b";
+  ctx.beginPath();
+  ctx.ellipse(x + w/2, y + h*0.08, w*0.44, w*0.24, 0, Math.PI, 0);
+  ctx.fill();
+  // cap top
+  ctx.fillRect(x + w*0.06, y + h*0.02, w - w*0.12, h*0.13);
+
+  // eyes
+  ctx.fillStyle = "#000";
+  ctx.fillRect(x + w*0.33, y + h*0.15, 3, 3);
+  ctx.fillRect(x + w*0.56, y + h*0.15, 3, 3);
+
+  // small moustache
+  ctx.fillStyle = "#3b2b24";
+  ctx.fillRect(x + w*0.42, y + h*0.22, 8, 3);
+
+  ctx.restore();
+}
+
+// ---- update ----
+function update(){
+  if(gameOver) return;
+
+  frame++;
+
+  // input
+  if(keys['ArrowLeft']){ player.vx = -player.speed; }
+  else if(keys['ArrowRight']){ player.vx = player.speed; }
+  else { player.vx = 0; }
+
+  if((keys['Space'] || keys['ArrowUp']) && !player.jumping){
+    player.vy = -12.5;
+    player.jumping = true;
+  }
+
+  // physics
+  player.vy += gravity;
+  player.x += player.vx;
+  player.y += player.vy;
+
+  // bounds
+  if(player.x < 0) player.x = 0;
+  if(player.x + player.w > W) player.x = W - player.w;
+
+  // platforms
+  platforms.forEach(p=>{
+    let platRect = {x:p.x, y:p.y, w:p.w, h:p.h};
+    let playerRect = {x:player.x, y:player.y, w:player.w, h:player.h};
+    if(rectsOverlap(platRect, playerRect)){
+      if(player.vy > 0 && (player.y + player.h - player.vy) <= p.y + 1){
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.jumping = false;
+      }
+    }
+  });
+
+  // collect trees
+  trees.forEach(t=>{
+    if(!t.collected){
+      let dx = (player.x + player.w/2) - t.x;
+      let dy = (player.y + player.h/2) - t.y;
+      let dist = Math.sqrt(dx*dx + dy*dy);
+      if(dist < t.r + 20){
+        t.collected = true;
+        player.trees++;
+      }
+    }
+  });
+
+  // 🔥 check collision with fire
+  if(rectsOverlap(player, fire)){
+    gameOver = true;
+    setTimeout(()=>{ alert("🔥 Game Over! لمست النار."); }, 120);
+    return;
+  }
+
+  // HUD
+  elTrees.innerText = player.trees;
+  elHealth.innerText = player.health;
+  elAQI.innerText = Math.max(0, 100 - player.trees*5);
+}
+
+// ---- draw ----
+function draw(){
+  ctx.clearRect(0,0,W,H);
+
+  // background sky gradient
+  // (canvas background already styled; we can paint ground and elements)
+  // ground
+  ctx.fillStyle = '#8c6b4f';
+  ctx.fillRect(0,H-40,W,40);
+
+  // platforms
+  platforms.forEach(p=>{
+    ctx.fillStyle = '#b28f74';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+  });
+
+  // trees
+  trees.forEach(t=>{
+    if(!t.collected){
+      // simple tree: trunk + green circle
+      ctx.fillStyle = '#7d4a2b';
+      ctx.fillRect(t.x-4, t.y+6, 8, 12);
+      ctx.fillStyle = '#2e8b57';
+      ctx.beginPath();
+      ctx.moveTo(t.x, t.y-18);
+      ctx.lineTo(t.x-18, t.y+4);
+      ctx.lineTo(t.x+18, t.y+4);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(t.x, t.y-10);
+      ctx.lineTo(t.x-14, t.y+8);
+      ctx.lineTo(t.x+14, t.y+8);
+      ctx.closePath(); ctx.fill();
+    }
+  });
+
+  // 🔥 draw fire (red/orange)
+  ctx.fillStyle = 'red';
+  ctx.fillRect(fire.x, fire.y, fire.w, fire.h);
+  ctx.fillStyle = 'orange';
+  ctx.fillRect(fire.x+5, fire.y+5, fire.w-10, fire.h-10);
+
+  // factories (simple)
+  factories.forEach(f=>{
+    ctx.fillStyle = '#6b6b6b'; ctx.fillRect(f.x, f.y, f.w, f.h);
+    ctx.fillStyle = '#4e4e4e'; ctx.fillRect(f.x + f.w - 12, f.y - 30, 12, 30);
+  });
+
+  // player (draw stylized)
+  drawPlayer(player.x, player.y, player.w, player.h);
+}
+
+// loop
+function loop(){
+  update();
+  draw();
+  if(!gameOver) requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
